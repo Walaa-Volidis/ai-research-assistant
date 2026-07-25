@@ -8,13 +8,9 @@ load_dotenv()
 
 MODEL = 'gemini-2.5-flash'
 
-# Server-side tool: Google runs the search and feeds results back to the model,
-# so this needs no extra API key or package. Provider-specific — the OpenAI
-# equivalent is {'type': 'web_search'}.
 WEB_SEARCH = {'google_search': {}}
 
-# Gemini refuses google_search together with any structured output, so the run is
-# split in two: search first as free text, then reformat with no tools attached.
+
 RESEARCH_PROMPT = """You are a thorough IT research assistant helping write academic papers and theses.
 
 Search before you answer, and search repeatedly with different phrasings until you have
@@ -84,10 +80,8 @@ def _grounding_urls(message):
                 seen.append(entry)
     return seen
 
-async def main():
-    topic = input('what is the topic for the paper/thesis?').strip()
-    questions = input('what are the key research questions?').strip()
-    time_frame = input('what time frame should the papers be from?').strip()
+async def generate_report(topic, questions, time_frame) -> Report:
+    """Research the topic and return a populated Report. Used by both the CLI and the web UI."""
     task = f"""Topic: {topic}
 Research questions: {questions}
 Time frame: {time_frame or 'no specific focus'}
@@ -107,10 +101,16 @@ Then identify the most important mathematical formulas for this subject and rece
         findings += '\n\nSources actually retrieved:\n' + '\n'.join(sources)
 
     formatter = ChatGoogleGenerativeAI(model=MODEL).with_structured_output(Report)
-    report = await formatter.ainvoke([
+    return await formatter.ainvoke([
         {'role': 'system', 'content': FORMAT_PROMPT},
         {'role': 'user', 'content': f'{task}\n\n--- RESEARCH NOTES ---\n{findings}'},
     ])
+
+async def main():
+    topic = input('what is the topic for the paper/thesis?').strip()
+    questions = input('what are the key research questions?').strip()
+    time_frame = input('what time frame should the papers be from?').strip()
+    report = await generate_report(topic, questions, time_frame)
     print(json.dumps(report.model_dump(), indent=2))
 
 if __name__ == '__main__':

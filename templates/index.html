@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Research Assistant</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="shell">
+
+    <header class="masthead">
+      <h1>Research Assistant</h1>
+      <p>Grounded literature search. Every paper comes from a real search result.</p>
+    </header>
+
+    <form id="form" class="panel" autocomplete="off">
+      <div class="field">
+        <label for="topic">Topic</label>
+        <textarea id="topic" name="topic" rows="2" required
+          placeholder="Recommender systems based exclusively on embedding similarity"></textarea>
+      </div>
+
+      <div class="field">
+        <label for="questions">Research questions</label>
+        <textarea id="questions" name="questions" rows="2"
+          placeholder="1. Do they outperform conventional SOTA models? 2. What are useful beyond-accuracy metrics?"></textarea>
+      </div>
+
+      <div class="field">
+        <label for="time_frame">Time frame <span class="opt">optional</span></label>
+        <input id="time_frame" name="time_frame" type="text" placeholder="only 2026 papers">
+      </div>
+
+      <button id="submit" type="submit">
+        <span class="label">Generate report</span>
+      </button>
+    </form>
+
+    <section id="status" class="panel status" hidden>
+      <div class="spinner" aria-hidden="true"></div>
+      <div class="status-text">
+        <strong id="status-line">Searching academic sources…</strong>
+        <span id="timer">0s</span>
+      </div>
+    </section>
+
+    <section id="error" class="panel error" hidden>
+      <strong>Report failed</strong>
+      <pre id="error-body"></pre>
+    </section>
+
+    <section id="results" hidden></section>
+
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
