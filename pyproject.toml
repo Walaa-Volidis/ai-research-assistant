@@ -12,3 +12,8 @@ dependencies = [
     "pydantic>=2.13.4",
     "python-dotenv>=1.2.2",
 ]
+
+# main.py also matches Vercel's entrypoint auto-detection but exposes no WSGI app,
+# so name the real one explicitly rather than relying on detection order.
+[tool.vercel]
+entrypoint = "app:app"
