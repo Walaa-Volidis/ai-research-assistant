@@ -1,14 +1,47 @@
+import os
 import json
 import asyncio
+import logging
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
+from langchain.agents import create_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.tools import load_mcp_tools
 
 load_dotenv()
 
-MODEL = 'gemini-2.5-flash'
+log = logging.getLogger(__name__)
+
+# Free-tier quota is per model per day (20 requests for gemini-2.5-flash, and a report
+# costs 2). Override with GEMINI_MODEL to fall back to a model whose quota is still intact.
+MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
+MODEL_ID = f'google_genai:{MODEL}'
 
 WEB_SEARCH = {'google_search': {}}
+
+# Consensus indexes peer-reviewed literature, so it is a far better source than a general
+# web search. Reached over stdio through mcp-remote, which needs Node and a one-time
+# browser login (see README).
+CONSENSUS_MCP = {
+    'consensus': {
+        'transport': 'stdio',
+        'command': 'npx',
+        'args': ['-y', 'mcp-remote@latest', 'https://mcp.consensus.app/mcp'],
+    }
+}
+
+CONSENSUS_PROMPT = """You are a thorough IT research assistant helping write academic papers and theses.
+
+Use the Consensus tools to search the literature. Search repeatedly with different phrasings
+until you have enough material, and never invent a title, author list, venue, year or URL:
+if a tool did not return it, it does not go in your notes.
+
+For each paper record title, authors, year, venue and URL exactly as the tool returned them,
+plus why it is relevant. Then cover the key formulas (with LaTeX) and recent trends.
+
+If the requested time frame yields fewer than 5 papers, report the ones you actually found
+and say so plainly. A short honest answer is correct; a padded fabricated one is not."""
 
 
 RESEARCH_PROMPT = """You are a thorough IT research assistant helping write academic papers and theses.
@@ -80,6 +113,37 @@ def _grounding_urls(message):
                 seen.append(entry)
     return seen
 
+async def research_via_consensus(task) -> str | None:
+    """Search the literature with the Consensus MCP tools and return free-form notes.
+
+    Returns None if the server cannot be reached — it needs Node plus a one-time browser
+    login — so the caller can fall back to web search rather than the whole report failing.
+    """
+    try:
+        client = MultiServerMCPClient(CONSENSUS_MCP)
+        async with client.session('consensus') as session:
+            tools = await load_mcp_tools(session)
+            agent = create_agent(MODEL_ID, tools=tools, system_prompt=CONSENSUS_PROMPT)
+            result = await agent.ainvoke({'messages': [{'role': 'user', 'content': task}]})
+            return result['messages'][-1].text
+    except Exception as exc:
+        log.warning('Consensus MCP unavailable (%s: %s); falling back to web search.',
+                    type(exc).__name__, exc)
+        return None
+
+async def research_via_web(task) -> str:
+    """Fallback: Gemini's built-in google_search, scoped to academic domains by the prompt."""
+    researcher = ChatGoogleGenerativeAI(model=MODEL).bind_tools([WEB_SEARCH])
+    notes = await researcher.ainvoke([
+        {'role': 'system', 'content': RESEARCH_PROMPT},
+        {'role': 'user', 'content': task},
+    ])
+    sources = _grounding_urls(notes)
+    findings = notes.text
+    if sources:
+        findings += '\n\nSources actually retrieved:\n' + '\n'.join(sources)
+    return findings
+
 async def generate_report(topic, questions, time_frame) -> Report:
     """Research the topic and return a populated Report. Used by both the CLI and the web UI."""
     task = f"""Topic: {topic}
@@ -89,17 +153,12 @@ Time frame: {time_frame or 'no specific focus'}
 Gather 5-10 highly relevant papers.
 Then identify the most important mathematical formulas for this subject and recent trends."""
 
-    researcher = ChatGoogleGenerativeAI(model=MODEL).bind_tools([WEB_SEARCH])
-    notes = await researcher.ainvoke([
-        {'role': 'system', 'content': RESEARCH_PROMPT},
-        {'role': 'user', 'content': task},
-    ])
+    findings = await research_via_consensus(task)
+    if findings is None:
+        findings = await research_via_web(task)
 
-    sources = _grounding_urls(notes)
-    findings = notes.text
-    if sources:
-        findings += '\n\nSources actually retrieved:\n' + '\n'.join(sources)
-
+    # Kept as a separate, tool-free call: Gemini rejects any structured output in the same
+    # request as a tool, so the schema has to be applied after the research step.
     formatter = ChatGoogleGenerativeAI(model=MODEL).with_structured_output(Report)
     return await formatter.ainvoke([
         {'role': 'system', 'content': FORMAT_PROMPT},
