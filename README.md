@@ -10,6 +10,7 @@ Available as a CLI and as a small Flask web UI.
 - Python 3.13+
 - [uv](https://docs.astral.sh/uv/)
 - A Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey)
+- Node 20.19+ (or 22 LTS) — only for the Consensus paper search; see below
 
 ## Setup
 
@@ -24,6 +25,17 @@ GOOGLE_API_KEY=your-key-here
 ```
 
 `.env` is gitignored — never commit it.
+
+Optionally set `GEMINI_MODEL` to override the default `gemini-2.5-flash`:
+
+```
+GEMINI_MODEL=gemini-2.5-flash-lite
+```
+
+Free-tier quota is **20 requests per day, per model**, and one report costs 2 requests — so
+roughly 10 reports per day per model. When one model is exhausted, switching to another gives
+a fresh allowance; `gemini-2.5-flash-lite` is the usual fallback, at some cost in quality
+(it tends to drop `venue`). The quota resets daily, or enable billing to lift it.
 
 ## Usage
 
@@ -46,13 +58,30 @@ Prompts for the same three inputs and prints the report as JSON.
 
 A report takes roughly 70 seconds — two model calls, the first of which runs several searches.
 
+## Paper search: Consensus MCP
+
+Research prefers the [Consensus](https://consensus.app) MCP server, which searches peer-reviewed
+literature rather than the open web. It runs over stdio via `mcp-remote`, so it needs Node and a
+**one-time browser login**:
+
+```bash
+npx -y mcp-remote@latest https://mcp.consensus.app/mcp
+```
+
+Authorise in the browser window that opens; the token is cached under `~/.mcp-auth` and later runs
+are non-interactive. The server requires OAuth (`scope="search"`) — there is no API-key option.
+
+If Consensus is unreachable or unauthorised, the run logs a warning and **falls back to
+`google_search`**, so the app keeps working either way. Check the log line to know which path a
+given report took.
+
 ## How it works
 
 Two sequential Gemini calls:
 
-1. **Research** — `gemini-2.5-flash` with the `google_search` built-in tool, returning free-form
-   notes. The prompt scopes queries to academic sources (arXiv, ACM, IEEE, OpenReview,
-   ACL Anthology) and forbids citing anything not seen in a search result.
+1. **Research** — either a `create_agent` loop over the Consensus MCP tools, or, as fallback,
+   `gemini-2.5-flash` with the built-in `google_search` tool. Returns free-form notes. Both
+   prompts forbid citing anything a search did not actually return.
 2. **Format** — the same model with no tools, converting those notes into the `Report` schema.
 
 The split is not stylistic. Gemini rejects `google_search` combined with any structured output,
@@ -64,7 +93,9 @@ in both directions:
 ```
 
 So search and schema have to happen in separate requests. Merging them back into one call —
-or into a single `create_agent(..., response_format=Report)` — will fail with the above.
+or into a single `create_agent(..., response_format=Report)` — will fail with the above. This is
+why the Consensus agent returns text and a second call applies the schema, rather than passing
+`response_format` to `create_agent` directly.
 
 URLs that Gemini actually retrieved are pulled from the response's grounding metadata and passed
 into step 2, so the formatting call has real sources to copy instead of inventing plausible ones.
